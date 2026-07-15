@@ -1,0 +1,25 @@
+# environment
+.venv/
+
+# generated dataset (rebuilt by scripts/prepare_data.py)
+data/
+
+# training logs (rebuilt by train.py)
+runs/
+
+# python
+__pycache__/
+*.pyc
+
+# regenerable model exports (scripts/export_bench.py)
+*.onnx
+
+# downloaded runtime cache (scripts/build_web_demo.py)
+web_demo/.ort_cache/
+
+# pretrained COCO weights auto-downloaded by ultralytics
+/yolo11n.pt
+/yolo11s.pt
+
+# macOS
+.DS_Store

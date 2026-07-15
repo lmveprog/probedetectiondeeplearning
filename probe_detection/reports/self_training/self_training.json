@@ -1,0 +1,23 @@
+{
+  "pseudo_labels": 85,
+  "coverage_of_unlabeled": 0.4971,
+  "rejected_by_temporal_filter": 5,
+  "pseudo_label_mean_iou_vs_human": 0.8624,
+  "results": {
+    "25% human labels (start)": {
+      "mAP50": 0.8451,
+      "mAP50_95": 0.5,
+      "recall": 1.0
+    },
+    "25% human + auto pseudo-labels": {
+      "mAP50": 0.9213,
+      "mAP50_95": 0.5794,
+      "recall": 0.8026
+    },
+    "100% human labels (upper bound)": {
+      "mAP50": 0.961,
+      "mAP50_95": 0.7354,
+      "recall": 0.8947
+    }
+  }
+}

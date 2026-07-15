@@ -1,0 +1,11 @@
+# macOS / local editor state
+.DS_Store
+.claude/
+
+# local dataset archives and extracted datasets
+probe_dataset/
+probe_dataset.zip
+
+# packaged submission artifacts kept outside the source tree
+probe_detection_submission.zip
+Probe Detection Using Deep Learning.docx

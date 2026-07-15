@@ -1,0 +1,22 @@
+{
+  "pytorch_cpu": {
+    "mean_ms": 22.6,
+    "std_ms": 2.1,
+    "size_mb": 5.5
+  },
+  "onnxruntime_cpu_fp32": {
+    "mean_ms": 24.9,
+    "std_ms": 3.5,
+    "size_mb": 10.6
+  },
+  "onnxruntime_cpu_int8": {
+    "mean_ms": 29.9,
+    "std_ms": 2.2,
+    "size_mb": 3.0
+  },
+  "int8_sanity": {
+    "fp32_best_conf": 0.87,
+    "int8_best_conf": 0.866,
+    "center_shift_px": 0.1
+  }
+}

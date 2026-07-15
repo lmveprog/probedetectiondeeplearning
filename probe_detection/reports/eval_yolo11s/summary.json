@@ -1,0 +1,29 @@
+{
+  "weights": "weights/probe_yolo11s.pt",
+  "ultralytics_val": {
+    "precision": 0.9335,
+    "recall": 0.9236,
+    "f1": 0.9285,
+    "mAP50": 0.9642,
+    "mAP50_95": 0.7365
+  },
+  "mean_iou_at_conf0.5": 0.8634,
+  "num_synthetic_negatives": 76,
+  "threshold_calibration": {
+    "chosen_conf_threshold": 0.1,
+    "recall_at_threshold": 0.9342,
+    "false_alarm_rate_at_threshold": 0.0263
+  },
+  "runtime_per_image": {
+    "mps": {
+      "mean_ms": 10.1,
+      "std_ms": 0.8,
+      "fps": 99.2
+    },
+    "cpu": {
+      "mean_ms": 34.1,
+      "std_ms": 2.5,
+      "fps": 29.3
+    }
+  }
+}

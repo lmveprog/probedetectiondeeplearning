@@ -1,0 +1,261 @@
+<meta charset="utf-8">
+<title>Probe Detection with Deep Learning — Report</title>
+<style>
+  body { font: 15px/1.55 -apple-system, "Segoe UI", sans-serif; color: #1a1a1a;
+         max-width: 900px; margin: 2em auto; padding: 0 1.5em; }
+  h1 { font-size: 1.7em; border-bottom: 2px solid #2563eb; padding-bottom: .3em; }
+  h2 { font-size: 1.25em; margin-top: 1.6em; color: #1e40af; }
+  table { border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid #cbd5e1; padding: .4em .7em; text-align: left; }
+  th { background: #eff6ff; }
+  img { max-width: 100%; margin: .6em 0; border: 1px solid #e2e8f0; }
+  figcaption { font-size: .85em; color: #555; margin-bottom: 1.2em; }
+  code { background: #f1f5f9; padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+  .note { background: #fefce8; border-left: 3px solid #eab308; padding: .6em 1em; margin: 1em 0; }
+</style>
+
+<h1>Probe Detection with Deep Learning</h1>
+<p><em>Candidate assignment report — Mathieu Astruc — July 2026</em></p>
+
+<h2>1. Approach overview</h2>
+<p>The pipeline is: dataset analysis &rarr; leakage-free data split &rarr; fine-tuning of a
+COCO-pretrained YOLO11 &rarr; evaluation with an explicitly calibrated &ldquo;no probe&rdquo;
+decision threshold &rarr; a self-contained <code>inference.py</code>. Two model sizes
+(YOLO11n and YOLO11s) were trained to measure the accuracy/latency trade-off relevant
+for embedded deployment.</p>
+
+<h2>2. What the data told us</h2>
+<p>The 308 images (640&times;400, grayscale, fisheye navigation camera) show dark, confined
+industrial assets where the probe frequently appears as an overexposed silhouette lit by the
+drone's onboard LEDs. Three findings shaped every later decision:</p>
+<ul>
+  <li><strong>The images belong to 21 flights across 5 drones</strong> (parsed from the file
+      names). Frames within one flight are near-duplicates taken seconds apart.</li>
+  <li><strong>Every image contains exactly one probe</strong> — there are no negative
+      examples, yet the system must be able to report &ldquo;no probe&rdquo; (Section&nbsp;6).</li>
+  <li>Probe size spans 0.5%&ndash;33% of the image; positions are bimodal (probe mounted on
+      top or below the drone). One flight (<code>EL300858804493_00188</code>) contains
+      full-image-height boxes: the probe and its cable at extreme close range.</li>
+</ul>
+<figure>
+  <img src="eda/annotated_samples.png" alt="annotated samples">
+  <figcaption>One annotated sample per flight: dark scenes, overexposed probe silhouettes,
+  fisheye distortion, large scale variation.</figcaption>
+</figure>
+<figure>
+  <img src="eda/bbox_stats.png" alt="bbox statistics">
+  <figcaption>Bounding-box geometry: probe centers cluster top-left and bottom (top/bottom
+  mount), sizes span 0.5%&ndash;33% of the image, with a small far-right cluster of
+  full-height boxes (the extreme close-range flight).</figcaption>
+</figure>
+<figure>
+  <img src="eda/images_per_flight.png" alt="images per flight" style="max-width:620px">
+  <figcaption>Frames per flight — the grouped train/val split operates on these 21 units.</figcaption>
+</figure>
+
+<h2>3. System selection: YOLO11 (Ultralytics)</h2>
+<p>A single-stage detector is the right tool for a single-class, at-most-one-object task:
+Faster&nbsp;R-CNN-style two-stage models add latency without accuracy benefit at this scale.
+YOLO11 was chosen because (a) COCO-pretrained weights transfer well to a 232-image training
+set, (b) the Ultralytics toolchain provides reliable training/evaluation out of the box, and
+(c) it has a first-class export path (ONNX &rarr; TensorRT, FP16/INT8) to the NVIDIA Jetson
+family, which matches the intended deployment target.</p>
+
+<h2>4. Data preparation — a leakage-free split</h2>
+<p>Annotations were converted from COCO <code>[x,&nbsp;y,&nbsp;w,&nbsp;h]</code> to YOLO
+normalized format. The train/val split is done <strong>at the flight level, not the image
+level</strong>: a flight's frames are near-identical, so a random image split would place
+twins of training images in validation and inflate every metric. Validation flights were
+picked round-robin across drones so that <strong>each of the 5 drones contributes one unseen
+flight</strong>: 232 train / 76 val images (24.7%).</p>
+
+<h2>5. Training</h2>
+<p>Fine-tuning on Apple M5 Pro (MPS), ~25&nbsp;min for YOLO11n (150 epochs), seed 42.</p>
+<table>
+  <tr><th>Hyperparameter</th><th>Value</th><th>Rationale</th></tr>
+  <tr><td>image size</td><td>640</td><td>native image width (letterboxed to 640&times;640)</td></tr>
+  <tr><td>epochs / patience</td><td>150 / 40</td><td>cheap epochs on 232 images; best-mAP checkpoint kept</td></tr>
+  <tr><td>batch / optimizer</td><td>16 / AdamW (auto LR &asymp; 1.8e-3)</td><td>Ultralytics auto settings</td></tr>
+  <tr><td>hue/saturation jitter</td><td>0 / 0</td><td>images are grayscale — color jitter is a no-op</td></tr>
+  <tr><td>brightness jitter</td><td>0.4</td><td>matches real LED-lighting variability</td></tr>
+  <tr><td>vertical flip</td><td>0.5</td><td>the probe is physically mounted above <em>or</em> below the drone, so vertical flips are realistic here</td></tr>
+  <tr><td>horizontal flip / rotation</td><td>0.5 / &plusmn;10&deg;</td><td>standard geometric augmentation</td></tr>
+  <tr><td>mosaic</td><td>on, off for last 15 epochs</td><td>strong regularizer for small datasets</td></tr>
+</table>
+
+<figure>
+  <img src="eval_yolo11n/training_curves.png" alt="training curves">
+  <figcaption>YOLO11n training curves: losses decrease smoothly and validation metrics climb
+  without divergence — no sign of overfitting despite the small dataset (strong augmentation
+  + early stopping on the best-mAP checkpoint).</figcaption>
+</figure>
+
+<h2>6. Results</h2>
+<table>
+  <tr><th>Model</th><th>Precision</th><th>Recall</th><th>F1</th><th>mAP@0.5</th>
+      <th>mAP@0.5:0.95</th><th>mean IoU*</th><th>ms/img MPS</th><th>ms/img CPU</th></tr>
+  <tr><td><strong>YOLO11n</strong> (2.6M params)</td><td><strong>0.996</strong></td><td>0.895</td>
+      <td><strong>0.943</strong></td><td>0.961</td><td>0.735</td><td><strong>0.876</strong></td>
+      <td><strong>6.9</strong> (146 fps)</td><td><strong>18.6</strong> (54 fps)</td></tr>
+  <tr><td>YOLO11s (9.4M params)</td><td>0.934</td><td>0.924</td><td>0.929</td><td>0.964</td>
+      <td>0.737</td><td>0.863</td><td>9.9 (101 fps)</td><td>33.8 (30 fps)</td></tr>
+</table>
+<p style="font-size:.85em">*mean IoU of matched detections at confidence &ge; 0.5.
+Latency: single image end-to-end (pre/inference/post), 30-image average after warm-up.</p>
+<figure>
+  <img src="eval_yolo11n/pr_curve.png" alt="precision-recall curve" style="max-width:560px">
+  <figcaption>Precision&ndash;recall curve of the delivered YOLO11n: precision stays near 1.0
+  until recall &asymp; 0.9, then drops sharply — the missed tail is the hard-case cluster
+  analyzed in Section&nbsp;7.</figcaption>
+</figure>
+<p class="note">The 3.6&times;-larger YOLO11s is <strong>not better</strong> than YOLO11n:
+with 232 training images, data — not model capacity — is the bottleneck. YOLO11n is therefore
+the recommended model, and the cheapest to deploy on a Jetson. All results are on a
+grouped-by-flight validation set; a random split would have reported flattering but
+meaningless numbers.</p>
+
+<h3>6.1 Calibrating the &ldquo;no probe&rdquo; decision</h3>
+<p>The detector reports &ldquo;no probe&rdquo; when no box exceeds a confidence threshold.
+Since the dataset has no negative images, the false-alarm rate was measured on
+<strong>synthetic negatives</strong>: for each validation image, the largest strip that does
+not contain the probe was cropped, giving 76 realistic probe-free industrial backgrounds
+(same camera, same lighting, same textures). Sweeping the threshold yields the operating
+curve below; the chosen point (max recall subject to &le;5% false alarms) is
+<strong>conf&nbsp;=&nbsp;0.30 &rarr; 92.1% recall, 3.9% false-alarm rate</strong>, used as
+the default in <code>inference.py</code>.</p>
+<figure>
+  <img src="eval_yolo11n/threshold_calibration.png" alt="threshold calibration" style="max-width:620px">
+</figure>
+
+<h2>7. Analysis</h2>
+<figure>
+  <img src="eval_yolo11n/qualitative_best_worst.png" alt="best and worst predictions">
+  <figcaption>Worst 4 (top) and best 4 (bottom) validation predictions.
+  Ground truth orange, prediction green.</figcaption>
+</figure>
+<p><strong>Strengths.</strong> Near-perfect precision (0.996): when the model fires, it is
+right. Typical probes are localized with IoU&nbsp;&asymp;&nbsp;0.9 at confidence
+&asymp;&nbsp;0.9, including frames with heavy dust, motion streaks and blur. Runtime
+(6.9&nbsp;ms/image on an M-series GPU, 18.6&nbsp;ms on CPU) is already real-time without any
+optimization.</p>
+<figure>
+  <img src="eval_yolo11n/robustness.png" alt="robustness study" style="max-width:620px">
+  <figcaption>Recall under increasing synthetic degradations: graceful decline for darkness,
+  overexposure and motion blur — but sensor noise halves the recall at high severity, the
+  model's clearest weakness.</figcaption>
+</figure>
+<p><strong>Weaknesses and trends.</strong> The missed detections follow two clear patterns:
+(1)&nbsp;<em>tiny, distant probes in very dark scenes</em> (bottom-left of the worst grid) and
+(2)&nbsp;<em>probes in front of bright, overexposed structures</em>, where the white-silhouette
+cue the model relies on disappears. The extreme-close-range flight with full-height boxes
+introduces ambiguity about the intended box extent (probe head vs. probe&nbsp;+&nbsp;cable) —
+worth clarifying in the annotation guidelines. Finally, with only 76 validation images from 5
+flights, all metrics carry noticeable variance; conclusions should be re-checked on a larger
+validation set.</p>
+
+<h2>8. Future improvements</h2>
+<p><strong>Accuracy &amp; robustness.</strong></p>
+<ul>
+  <li><strong>Collect real negatives and hard negatives</strong> (probe-free flights, other
+      tools/equipment that could be confused with the probe) — the current false-alarm
+      estimate relies on synthetic crops, and precision against confusable objects is
+      untested.</li>
+  <li><strong>Exploit temporal consistency</strong>: in the real product the input is a video
+      stream; a lightweight tracker (e.g. ByteTrack) over per-frame detections would smooth
+      out isolated misses and false alarms at near-zero cost.</li>
+  <li><strong>Active learning loop</strong>: mine production frames where the model's
+      confidence is in the uncertain band (0.2&ndash;0.5), have them annotated, retrain —
+      the fastest way to fix the two identified failure modes.</li>
+  <li>Photometric preprocessing tuned to the sensor (histogram equalization / CLAHE) to
+      recover detail in over- and under-exposed regions.</li>
+</ul>
+<p><strong>Inference runtime on NVIDIA Jetson.</strong></p>
+<ul>
+  <li>Export to <strong>TensorRT</strong> (via ONNX): typically 2&ndash;4&times; over PyTorch
+      on Jetson. Start with <strong>FP16</strong> (free on Jetson tensor cores), then
+      <strong>INT8</strong> with a calibration set drawn from the training images.</li>
+  <li>Reduce input resolution (640&nbsp;&rarr;&nbsp;512 or 416) after verifying recall on
+      small probes; latency scales roughly quadratically with resolution.</li>
+  <li>Keep the <strong>nano</strong> model (results show larger capacity buys nothing here);
+      on Orin-class boards, offload to the <strong>DLA</strong> to free the GPU.</li>
+  <li>Zero-copy preprocessing (resize/normalize on GPU, e.g. DeepStream or CUDA), and
+      pin the model in memory to avoid per-frame warm-up.</li>
+</ul>
+
+<h2>9. Beyond the assignment</h2>
+<p>Seven extensions were carried out to probe the system the way production would:</p>
+<ul>
+  <li><strong>Flight replay demo.</strong> The file names embed capture timestamps (one frame
+      per 300&nbsp;ms), so each validation flight was reconstructed and replayed through the
+      detector with the temporal logic a real onboard pipeline would use (EMA box smoothing,
+      2-frame hysteresis before declaring the probe lost). See
+      <code>reports/demo/demo_reel.mp4</code>.</li>
+  <li><strong>Synthetic negative training data.</strong> The probe was erased from one frame
+      per training flight by inpainting (with sensor-matched noise re-injected so the patch is
+      not a learnable artifact), plus probe-free crops — 14% background images. The retrained
+      model <em>did not beat the baseline</em>: equal recall but a higher false-alarm rate
+      across the operating range. With only 32 negatives against an already-low baseline
+      false-alarm rate, the honest conclusion is that real probe-free flights are needed to
+      move this needle.</li>
+  <li><strong>Robustness study.</strong> Recall was measured under increasing darkness,
+      overexposure, motion blur and sensor noise (4 severity levels each,
+      <code>reports/eval_yolo11n/robustness.png</code>). Degradation is graceful except for
+      <strong>sensor noise (recall 0.92&nbsp;&rarr;&nbsp;0.50)</strong> — an actionable
+      finding: add noise augmentation during training or light denoising in the deployed
+      preprocessing.</li>
+  <li><strong>Self-improvement loop (temporal pseudo-labeling).</strong> Simulating a
+      production feedback system: a weak model trained on only 25% of the flights
+      pseudo-labels the remaining flights <em>without access to their human labels</em>,
+      keeping only detections that are temporally stable across neighboring frames (0.3&nbsp;s
+      apart — physics as a free supervisor) and above a confidence threshold calibrated on
+      the labeled subset (essential: the under-trained model's confidences peak at ~0.014).
+      The auto-generated labels reach <strong>IoU&nbsp;0.86 against the hidden human
+      annotations</strong>, and retraining on them lifts mAP@0.5 from 0.845 to 0.921 —
+      closing about two thirds of the gap to the fully-supervised model with
+      <strong>zero additional annotation</strong>. In production this means the system can
+      keep improving from ordinary flight footage alone.</li>
+  <li><strong>Learning curve.</strong> The same recipe trained on nested 25/50/75/100%
+      subsets of the training flights (fixed validation set) shows detection presence
+      saturating early (mAP@0.5 = 0.951 at half the data) while <em>localization quality is
+      still climbing at 100%</em> (mAP@0.5:0.95: 0.50 &rarr; 0.62 &rarr; 0.70 &rarr; 0.74):
+      collecting more annotated flights would still pay, mostly in box accuracy.</li>
+  <li><strong>Zero-install browser demo.</strong> The trained network, exported to ONNX and
+      packed with a WebAssembly runtime into a single self-contained HTML file
+      (<code>web_demo/probe_demo.html</code>): drop any image on it and the detector runs
+      locally in the browser — a stricter deployment environment than a Jetson.</li>
+  <li><strong>Deployment benchmark.</strong> ONNX export (the graph a Jetson TensorRT engine
+      consumes) plus int8 dynamic quantization: the model shrinks 10.6&nbsp;&rarr;&nbsp;3.0&nbsp;MB
+      (3.5&times;) with detections preserved (best confidence 0.870&nbsp;&rarr;&nbsp;0.866, box
+      center shift 0.1&nbsp;px). Int8 gave no CPU speed-up on the development machine — the
+      latency gains materialize on Jetson tensor cores, which is where FP16/INT8 TensorRT
+      engines would be built.</li>
+</ul>
+
+<figure>
+  <img src="self_training/self_training.png" alt="self-training results" style="max-width:640px">
+  <figcaption>Self-improvement loop: temporally-filtered pseudo-labels (auto-generated,
+  IoU 0.86 vs the hidden human annotations) close about two thirds of the mAP@0.5 gap to
+  full supervision without any new annotation.</figcaption>
+</figure>
+<figure>
+  <img src="learning_curve/learning_curve.png" alt="learning curve" style="max-width:640px">
+  <figcaption>Learning curve on nested flight subsets: detection presence (mAP@0.5)
+  saturates by ~50% of the data, while localization quality (mAP@0.5:0.95) is still climbing
+  at 100% — more annotated flights would still pay. (The recall point at 25% is a
+  calibration artifact of the under-trained model, not a real regression.)</figcaption>
+</figure>
+<figure>
+  <img src="eval_yolo11n_neg/comparison.png" alt="negative augmentation comparison" style="max-width:640px">
+  <figcaption>Negative-augmentation experiment: across the threshold range the baseline
+  matches the retrained model's recall with equal or fewer false alarms — the honest
+  conclusion is to keep the baseline.</figcaption>
+</figure>
+
+<h2>10. Deliverables</h2>
+<ul>
+  <li><code>inference.py</code> — folder in, annotated images out (or window display),
+      explicit &ldquo;NO PROBE DETECTED&rdquo; notification, <code>detections.json</code>.</li>
+  <li><code>weights/probe_yolo11n.pt</code> (recommended) and <code>probe_yolo11s.pt</code>.</li>
+  <li>Training/evaluation/data-prep code: <code>train.py</code>, <code>evaluate.py</code>,
+      <code>scripts/</code>. Run instructions in <code>README.md</code>.</li>
+</ul>
