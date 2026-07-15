@@ -1,6 +1,3 @@
-# macOS / local editor state
-.DS_Store
-.claude/
 
 # local dataset archives and extracted datasets
 probe_dataset/
