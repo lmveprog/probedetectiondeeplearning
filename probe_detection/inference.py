@@ -68,7 +68,9 @@ def main() -> None:
     input_folder = Path(args.input_folder)
     if not input_folder.is_dir():
         raise SystemExit(f"error: {input_folder} is not a folder")
-    image_paths = sorted(p for p in input_folder.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+    # rglob, not iterdir: a validation set organized in per-flight subfolders
+    # must work too. The tree is mirrored in the output folder.
+    image_paths = sorted(p for p in input_folder.rglob("*") if p.suffix.lower() in IMAGE_EXTS)
     if not image_paths:
         raise SystemExit(f"error: no image files found in {input_folder}")
 
@@ -85,22 +87,25 @@ def main() -> None:
             continue
 
         t0 = time.perf_counter()
-        # conf=0.05 so we can apply our own calibrated threshold in annotate()
-        result = model.predict(img, conf=0.05, verbose=False, device=args.device)[0]
+        # predict below the calibrated threshold so annotate() applies it itself
+        result = model.predict(img, conf=min(0.05, args.conf), verbose=False, device=args.device)[0]
         times.append(time.perf_counter() - t0)
 
         img, det = annotate(img, result, args.conf)
-        detections[path.name] = det
+        rel = path.relative_to(input_folder)
+        detections[str(rel)] = det
         status = (f"probe at {det['bbox_xyxy']} (conf {det['confidence']:.2f})"
                   if det["detected"] else "NO PROBE DETECTED")
-        print(f"{path.name}: {status}")
+        print(f"{rel}: {status}")
 
         if args.show:
             cv2.imshow("probe detection (press any key, q to quit)", img)
             if cv2.waitKey(0) & 0xFF == ord("q"):
                 break
         else:
-            cv2.imwrite(str(output / path.name), img)
+            dest = output / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(dest), img)
 
     if args.show:
         cv2.destroyAllWindows()

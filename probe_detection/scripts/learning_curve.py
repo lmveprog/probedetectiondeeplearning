@@ -26,11 +26,12 @@ from ultralytics import YOLO
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from train import TRAIN_KWARGS  # noqa: E402
+from train import TRAIN_KWARGS, pick_device  # noqa: E402
 from eda import flight_key  # noqa: E402
 
 FRACTIONS = [0.25, 0.5, 0.75, 1.0]
 BASELINE_100 = ROOT / "runs" / "yolo11n" / "weights" / "best.pt"
+DEVICE = pick_device()
 
 
 def main() -> None:
@@ -66,12 +67,12 @@ def main() -> None:
                 "names:\n  0: probe\n"
             )
             YOLO("yolo11n.pt").train(
-                data=str(yaml), device="mps", project=str(ROOT / "runs"),
+                data=str(yaml), device=DEVICE, project=str(ROOT / "runs"),
                 name=f"lc_{pct}", exist_ok=True, **TRAIN_KWARGS,
             )
             best = ROOT / "runs" / f"lc_{pct}" / "weights" / "best.pt"
 
-        m = YOLO(str(best)).val(data=str(ROOT / "data" / "probe.yaml"), device="mps", verbose=False)
+        m = YOLO(str(best)).val(data=str(ROOT / "data" / "probe.yaml"), device=DEVICE, verbose=False)
         results.append({"fraction": frac, "images": len(subset), "flights": nfl,
                         "mAP50": round(float(m.box.map50), 4),
                         "mAP50_95": round(float(m.box.map), 4),

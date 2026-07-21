@@ -22,6 +22,25 @@ from ultralytics import YOLO
 
 ROOT = Path(__file__).resolve().parent
 
+
+def pick_device(preferred: str | None = None) -> str:
+    """Resolve the compute device: explicit choice, else CUDA > MPS > CPU.
+
+    Development happened on Apple Silicon (MPS), but nothing here is
+    Mac-specific: every script auto-detects so the same commands run
+    unchanged on a CUDA machine or on a plain CPU.
+    """
+    if preferred:
+        return preferred
+    import torch
+
+    if torch.cuda.is_available():
+        return "0"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 # Single source of truth for the training recipe — scripts/learning_curve.py
 # imports this so every data-fraction run uses the exact same settings.
 TRAIN_KWARGS = dict(
@@ -48,13 +67,13 @@ def main() -> None:
     ap.add_argument("--name", default=None, help="run name (defaults to the model stem)")
     ap.add_argument("--epochs", type=int, default=150)
     ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--device", default="mps")
+    ap.add_argument("--device", default=None, help="cpu, mps, cuda index; auto-detected if omitted")
     args = ap.parse_args()
 
     model = YOLO(args.model)
     model.train(
         data=args.data,
-        device=args.device,
+        device=pick_device(args.device),
         project=str(ROOT / "runs"),
         name=args.name or Path(args.model).stem,
         exist_ok=True,

@@ -8,10 +8,11 @@ Four parts, each feeding a section of the report:
      that does NOT contain the probe. These realistic probe-free industrial
      backgrounds let us measure the false-alarm rate and sweep the confidence
      threshold to pick the operating point used by inference.py.
-  3. Inference runtime benchmark (per-image latency on MPS and CPU).
+  3. Inference runtime benchmark (per-image latency on the available
+     accelerator and on CPU).
   4. Qualitative grid of the best and worst val predictions (by IoU).
 
-Usage: python evaluate.py [--weights runs/yolo11n/weights/best.pt]
+Usage: python evaluate.py [--weights runs/yolo11n/weights/best.pt] [--device cpu]
 """
 
 import argparse
@@ -23,6 +24,8 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from ultralytics import YOLO
+
+from train import pick_device
 
 ROOT = Path(__file__).resolve().parent
 MIN_NEG_SIDE = 160  # a synthetic negative strip must be at least this wide/tall
@@ -68,17 +71,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", default=str(ROOT / "runs" / "yolo11n" / "weights" / "best.pt"))
     ap.add_argument("--out", default=str(ROOT / "reports" / "eval"))
+    ap.add_argument("--device", default=None, help="cpu, mps, cuda index; auto-detected if omitted")
     args = ap.parse_args()
 
+    dev = pick_device(args.device)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    summary = {"weights": args.weights}
+    summary = {"weights": args.weights, "device": dev}
 
     # ---- 1. standard metrics (ultralytics val) ----------------------------
     # val() puts the model weights in inference mode on MPS, which breaks any
     # later predict() call ("Inference tensors do not track version counter"),
     # so a dedicated instance is used here and a fresh one for predictions.
-    m = YOLO(args.weights).val(data=str(ROOT / "data" / "probe.yaml"), device="mps", verbose=False)
+    m = YOLO(args.weights).val(data=str(ROOT / "data" / "probe.yaml"), device=dev, verbose=False)
     model = YOLO(args.weights)
     p, r = float(m.box.mp), float(m.box.mr)
     summary["ultralytics_val"] = {
@@ -91,7 +96,7 @@ def main() -> None:
     val_items = load_val_set()
     preds = []  # (image_path, gt, best_conf, best_iou)
     for img_path, gt in val_items:
-        res = model.predict(str(img_path), conf=0.01, verbose=False, device="mps")[0]
+        res = model.predict(str(img_path), conf=0.01, verbose=False, device=dev)[0]
         if len(res.boxes) == 0:
             preds.append((img_path, gt, 0.0, 0.0))
             continue
@@ -109,7 +114,7 @@ def main() -> None:
             negatives.append(crop)
     neg_confs = []
     for crop in negatives:
-        res = model.predict(crop, conf=0.01, verbose=False, device="mps")[0]
+        res = model.predict(crop, conf=0.01, verbose=False, device=dev)[0]
         neg_confs.append(float(res.boxes.conf.max()) if len(res.boxes) else 0.0)
     summary["num_synthetic_negatives"] = len(negatives)
 
@@ -138,7 +143,8 @@ def main() -> None:
     # ---- 3. runtime benchmark ---------------------------------------------
     bench_imgs = [cv2.imread(str(p)) for p, _ in val_items[:30]]
     runtimes = {}
-    for device in ("mps", "cpu"):
+    # accelerator (if any) + CPU; CPU is the honest proxy for embedded targets
+    for device in dict.fromkeys([dev, "cpu"]):
         for img in bench_imgs[:5]:  # warm-up
             model.predict(img, verbose=False, device=device)
         times = []
@@ -159,7 +165,7 @@ def main() -> None:
         img = cv2.cvtColor(cv2.imread(str(img_path)), cv2.COLOR_BGR2RGB)
         x1, y1, x2, y2 = (int(v) for v in gt)
         cv2.rectangle(img, (x1, y1), (x2, y2), (255, 160, 40), 2)  # GT orange (img is RGB here)
-        res = model.predict(str(img_path), conf=0.25, verbose=False, device="mps")[0]
+        res = model.predict(str(img_path), conf=0.25, verbose=False, device=dev)[0]
         if len(res.boxes):
             b = int(res.boxes.conf.argmax())
             px1, py1, px2, py2 = (int(v) for v in res.boxes.xyxy[b])

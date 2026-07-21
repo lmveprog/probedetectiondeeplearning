@@ -33,13 +33,14 @@ from ultralytics import YOLO
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-from train import TRAIN_KWARGS  # noqa: E402
+from train import TRAIN_KWARGS, pick_device  # noqa: E402
 from eda import flight_key  # noqa: E402
 from video_demo import timestamp_ms  # noqa: E402
 
 WEAK_WEIGHTS = ROOT / "runs" / "lc_25" / "weights" / "best.pt"
 IOU_STABLE = 0.30    # required overlap with a neighboring-frame detection
 TARGET_PRECISION = 0.90  # pseudo-label threshold is calibrated for this precision
+DEVICE = pick_device()
 
 # NOTE: no absolute confidence threshold here. A model trained on 61 images is
 # heavily under-calibrated (best confidences ~0.014 on this run!) even though
@@ -85,7 +86,7 @@ def calibrate_conf(weak, labeled, by_flight) -> float:
     scored = []
     for fk in sorted(labeled):
         for p in by_flight[fk]:
-            r = weak.predict(str(p), conf=0.001, verbose=False, device="mps")[0]
+            r = weak.predict(str(p), conf=0.001, verbose=False, device=DEVICE)[0]
             if len(r.boxes):
                 b = int(r.boxes.conf.argmax())
                 box = [float(v) for v in r.boxes.xyxy[b]]
@@ -121,7 +122,7 @@ def main() -> None:
         paths.sort(key=lambda p: timestamp_ms(p.name))
         dets = []
         for p in paths:
-            r = weak.predict(str(p), conf=0.01, verbose=False, device="mps")[0]
+            r = weak.predict(str(p), conf=0.01, verbose=False, device=DEVICE)[0]
             if len(r.boxes):
                 b = int(r.boxes.conf.argmax())
                 dets.append((p, float(r.boxes.conf[b]), [float(v) for v in r.boxes.xyxy[b]]))
@@ -184,7 +185,7 @@ def main() -> None:
     yaml = ROOT / "data" / "probe_self.yaml"
     yaml.write_text(f"path: {(ROOT / 'data').resolve()}\ntrain: images/train_self\n"
                     "val: images/val\nnames:\n  0: probe\n")
-    YOLO("yolo11n.pt").train(data=str(yaml), device="mps", project=str(ROOT / "runs"),
+    YOLO("yolo11n.pt").train(data=str(yaml), device=DEVICE, project=str(ROOT / "runs"),
                              name="self_train", exist_ok=True, **TRAIN_KWARGS)
 
     # ---- results -------------------------------------------------------------
@@ -192,7 +193,7 @@ def main() -> None:
     for name, w in [("25% human labels (start)", WEAK_WEIGHTS),
                     ("25% human + auto pseudo-labels", ROOT / "runs" / "self_train" / "weights" / "best.pt"),
                     ("100% human labels (upper bound)", ROOT / "runs" / "yolo11n" / "weights" / "best.pt")]:
-        m = YOLO(str(w)).val(data=str(ROOT / "data" / "probe.yaml"), device="mps", verbose=False)
+        m = YOLO(str(w)).val(data=str(ROOT / "data" / "probe.yaml"), device=DEVICE, verbose=False)
         rows[name] = {"mAP50": round(float(m.box.map50), 4), "mAP50_95": round(float(m.box.map), 4),
                       "recall": round(float(m.box.mr), 4)}
         print(f"[self_training] {name}: {rows[name]}", flush=True)
