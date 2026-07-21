@@ -14,9 +14,6 @@ __pycache__/
 # regenerable model exports (scripts/export_bench.py)
 *.onnx
 
-# downloaded runtime cache (scripts/build_web_demo.py)
-web_demo/.ort_cache/
-
 # pretrained COCO weights auto-downloaded by ultralytics
 /yolo11n.pt
 /yolo11s.pt
