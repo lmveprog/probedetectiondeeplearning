@@ -1,7 +1,6 @@
 # Probe Detection with Deep Learning
 
-Detection of the ultrasonic thickness measurement probe in Elios3 drone
-images — candidate assignment, Mathieu Astruc.
+Detection of the ultrasonic thickness measurement probe 
 
 A fine-tuned YOLO11n takes an image and returns the probe bounding box, or
 reports that no probe is present. **Results on a leakage-free validation
